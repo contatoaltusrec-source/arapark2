@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useActivity } from '../foundation/ActivityContext';
+import { WORLD_WIDTH, WORLD_HEIGHT, generateDecorations, getCurrentArea, MAP_AREAS, type MapArea } from './world/MapData';
+import { type Camera, type Viewport, updateCamera, renderWorld } from './world/WorldRenderer';
 
 interface Position {
   x: number;
@@ -15,16 +17,17 @@ interface Player {
   speaking: boolean;
   direction: 'left' | 'right' | 'up' | 'down';
   moving: boolean;
+  targetX?: number;
+  targetY?: number;
 }
 
-const MAP_WIDTH = 1200;
-const MAP_HEIGHT = 800;
-const PLAYER_SPEED = 3;
-const VOICE_RANGE = 150;
-const VOICE_FADE_START = 100;
+const PLAYER_SPEED = 4;
+const VOICE_RANGE = 180;
+const VOICE_FADE_START = 120;
+const BOT_COUNT = 15;
 
-const BOT_NAMES = ['Luna', 'Max', 'Sofi', 'Leo', 'Maya', 'Kai', 'Nina', 'Ravi'];
-const BOT_COLORS = ['#f472b6', '#60a5fa', '#fbbf24', '#a78bfa', '#34d399', '#fb923c', '#f87171', '#2dd4bf'];
+const BOT_NAMES = ['Luna', 'Max', 'Sofi', 'Leo', 'Maya', 'Kai', 'Nina', 'Ravi', 'Zara', 'Finn', 'Iris', 'Theo', 'Cleo', 'Juno', 'Atlas'];
+const BOT_COLORS = ['#f472b6', '#60a5fa', '#fbbf24', '#a78bfa', '#34d399', '#fb923c', '#f87171', '#2dd4bf', '#e879f9', '#818cf8', '#facc15', '#4ade80', '#f97316', '#06b6d4', '#c084fc'];
 
 function distance(a: Position, b: Position): number {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
@@ -40,29 +43,41 @@ export function AraParkUnityHost() {
   const { setStatus, sendBridgeEvent, updateMetrics, closeActivity } = useActivity();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const keysRef = useRef<Set<string>>(new Set());
-  const playerRef = useRef<Position>({ x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 });
+  const playerRef = useRef<Position>({ x: 1600, y: 1600 });
   const playerDirectionRef = useRef<'left' | 'right' | 'up' | 'down'>('down');
+  const cameraRef = useRef<Camera>({ x: 1400, y: 1400, zoom: 1 });
+  const viewportRef = useRef<Viewport>({ width: 900, height: 600 });
   const botsRef = useRef<Player[]>([]);
+  const decorationsRef = useRef(generateDecorations());
   const frameRef = useRef(0);
   const [loaded, setLoaded] = useState(false);
   const [voiceUsers, setVoiceUsers] = useState(0);
   const [micActive, setMicActive] = useState(false);
+  const [currentArea, setCurrentArea] = useState<MapArea | null>(null);
+  const [playerCount] = useState(BOT_COUNT + 1);
+  const [showMinimap, setShowMinimap] = useState(true);
   const animFrameRef = useRef<number>(0);
+  const timeRef = useRef(0);
 
-  // Initialize bots
+  // Initialize bots spread across the map
   useEffect(() => {
-    const bots: Player[] = BOT_NAMES.slice(0, 5).map((name, i) => ({
-      id: `bot-${i}`,
-      name,
-      position: {
-        x: 200 + Math.random() * (MAP_WIDTH - 400),
-        y: 200 + Math.random() * (MAP_HEIGHT - 400),
-      },
-      color: BOT_COLORS[i],
-      speaking: Math.random() > 0.6,
-      direction: (['left', 'right', 'up', 'down'] as const)[Math.floor(Math.random() * 4)],
-      moving: true,
-    }));
+    const bots: Player[] = BOT_NAMES.slice(0, BOT_COUNT).map((name, i) => {
+      const area = MAP_AREAS[i % MAP_AREAS.length];
+      return {
+        id: `bot-${i}`,
+        name,
+        position: {
+          x: area.bounds.x + 50 + Math.random() * (area.bounds.w - 100),
+          y: area.bounds.y + 50 + Math.random() * (area.bounds.h - 100),
+        },
+        color: BOT_COLORS[i],
+        speaking: Math.random() > 0.5,
+        direction: (['left', 'right', 'up', 'down'] as const)[Math.floor(Math.random() * 4)],
+        moving: true,
+        targetX: undefined,
+        targetY: undefined,
+      };
+    });
     botsRef.current = bots;
   }, []);
 
@@ -75,16 +90,35 @@ export function AraParkUnityHost() {
       setLoaded(true);
       setStatus('ready');
       sendBridgeEvent({ type: 'UNITY_LOAD_COMPLETE', source: 'unity' });
-      sendBridgeEvent({ type: 'WORLD_READY', source: 'unity', payload: { width: MAP_WIDTH, height: MAP_HEIGHT } });
-    }, 1500);
+      sendBridgeEvent({ type: 'WORLD_READY', source: 'unity', payload: { width: WORLD_WIDTH, height: WORLD_HEIGHT } });
+    }, 2000);
 
     return () => clearTimeout(timer);
   }, [setStatus, sendBridgeEvent]);
+
+  // Handle canvas resize
+  useEffect(() => {
+    const handleResize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      if (!parent) return;
+      const rect = parent.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      viewportRef.current = { width: rect.width, height: rect.height };
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [loaded]);
 
   // Keyboard input
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current.add(e.key.toLowerCase());
+      if (e.key === 'm' || e.key === 'M') setShowMinimap(prev => !prev);
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       keysRef.current.delete(e.key.toLowerCase());
@@ -104,38 +138,72 @@ export function AraParkUnityHost() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    timeRef.current = performance.now();
     const keys = keysRef.current;
     const player = playerRef.current;
+    const viewport = viewportRef.current;
     let moving = false;
 
-    // Movement
+    // Player movement
     if (keys.has('w') || keys.has('arrowup')) { player.y -= PLAYER_SPEED; playerDirectionRef.current = 'up'; moving = true; }
     if (keys.has('s') || keys.has('arrowdown')) { player.y += PLAYER_SPEED; playerDirectionRef.current = 'down'; moving = true; }
     if (keys.has('a') || keys.has('arrowleft')) { player.x -= PLAYER_SPEED; playerDirectionRef.current = 'left'; moving = true; }
     if (keys.has('d') || keys.has('arrowright')) { player.x += PLAYER_SPEED; playerDirectionRef.current = 'right'; moving = true; }
 
-    // Clamp
-    player.x = Math.max(20, Math.min(MAP_WIDTH - 20, player.x));
-    player.y = Math.max(20, Math.min(MAP_HEIGHT - 20, player.y));
+    // Clamp to world
+    player.x = Math.max(20, Math.min(WORLD_WIDTH - 20, player.x));
+    player.y = Math.max(20, Math.min(WORLD_HEIGHT - 20, player.y));
 
-    // Move bots
+    // Update camera
+    cameraRef.current = updateCamera(cameraRef.current, player.x, player.y, viewport);
+
+    // Update current area
+    const area = getCurrentArea(player.x, player.y);
+    setCurrentArea(area);
+
+    // Move bots with AI
     botsRef.current.forEach(bot => {
-      if (Math.random() < 0.02) {
+      // Random behavior changes
+      if (Math.random() < 0.01) {
         bot.direction = (['left', 'right', 'up', 'down'] as const)[Math.floor(Math.random() * 4)];
       }
-      if (Math.random() < 0.005) bot.moving = !bot.moving;
-      if (Math.random() < 0.01) bot.speaking = !bot.speaking;
+      if (Math.random() < 0.003) bot.moving = !bot.moving;
+      if (Math.random() < 0.008) bot.speaking = !bot.speaking;
+
+      // Sometimes pick a target in current area
+      if (Math.random() < 0.002 && !bot.targetX) {
+        const botArea = getCurrentArea(bot.position.x, bot.position.y) || MAP_AREAS[0];
+        bot.targetX = botArea.bounds.x + 50 + Math.random() * (botArea.bounds.w - 100);
+        bot.targetY = botArea.bounds.y + 50 + Math.random() * (botArea.bounds.h - 100);
+      }
 
       if (bot.moving) {
-        const speed = 1.2;
-        switch (bot.direction) {
-          case 'up': bot.position.y -= speed; break;
-          case 'down': bot.position.y += speed; break;
-          case 'left': bot.position.x -= speed; break;
-          case 'right': bot.position.x += speed; break;
+        const speed = 1.5;
+
+        if (bot.targetX !== undefined && bot.targetY !== undefined) {
+          const dx = bot.targetX - bot.position.x;
+          const dy = bot.targetY - bot.position.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 10) {
+            bot.targetX = undefined;
+            bot.targetY = undefined;
+          } else {
+            bot.position.x += (dx / dist) * speed;
+            bot.position.y += (dy / dist) * speed;
+            bot.direction = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+          }
+        } else {
+          switch (bot.direction) {
+            case 'up': bot.position.y -= speed; break;
+            case 'down': bot.position.y += speed; break;
+            case 'left': bot.position.x -= speed; break;
+            case 'right': bot.position.x += speed; break;
+          }
         }
-        bot.position.x = Math.max(30, Math.min(MAP_WIDTH - 30, bot.position.x));
-        bot.position.y = Math.max(30, Math.min(MAP_HEIGHT - 30, bot.position.y));
+
+        bot.position.x = Math.max(30, Math.min(WORLD_WIDTH - 30, bot.position.x));
+        bot.position.y = Math.max(30, Math.min(WORLD_HEIGHT - 30, bot.position.y));
       }
     });
 
@@ -157,207 +225,68 @@ export function AraParkUnityHost() {
         entitiesKnown: botsRef.current.length + 1,
         voiceUsers: inVoiceRange,
         currentCell: `${cellX},${cellY}`,
-        messagesPerSecond: Math.round(20 + Math.random() * 10),
-        rxBytes: Math.round(1024 + Math.random() * 512),
-        txBytes: Math.round(256 + Math.random() * 128),
-        ping: Math.round(20 + Math.random() * 30),
+        messagesPerSecond: Math.round(30 + Math.random() * 20),
+        rxBytes: Math.round(2048 + Math.random() * 1024),
+        txBytes: Math.round(512 + Math.random() * 256),
+        ping: Math.round(15 + Math.random() * 25),
       });
     }
 
     // === RENDER ===
-    // Background
-    ctx.fillStyle = '#1a2e1a';
-    ctx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Grid
-    ctx.strokeStyle = '#2a4a2a';
-    ctx.lineWidth = 0.5;
-    for (let x = 0; x < MAP_WIDTH; x += 50) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, MAP_HEIGHT);
-      ctx.stroke();
-    }
-    for (let y = 0; y < MAP_HEIGHT; y += 50) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(MAP_WIDTH, y);
-      ctx.stroke();
-    }
+    // Render world
+    renderWorld(ctx, cameraRef.current, viewport, decorationsRef.current, timeRef.current);
 
-    // Decorative elements (trees, flowers)
-    const decorations = [
-      { x: 100, y: 100, type: 'tree' },
-      { x: 300, y: 150, type: 'tree' },
-      { x: 800, y: 200, type: 'tree' },
-      { x: 1000, y: 600, type: 'tree' },
-      { x: 150, y: 500, type: 'flower' },
-      { x: 600, y: 400, type: 'flower' },
-      { x: 900, y: 300, type: 'flower' },
-      { x: 400, y: 650, type: 'bench' },
-      { x: 700, y: 100, type: 'bench' },
-    ];
+    // Render players (on top of world, in camera space)
+    ctx.save();
+    ctx.scale(cameraRef.current.zoom, cameraRef.current.zoom);
+    ctx.translate(-cameraRef.current.x, -cameraRef.current.y);
 
-    decorations.forEach(dec => {
-      if (dec.type === 'tree') {
-        ctx.fillStyle = '#2d5a2d';
-        ctx.beginPath();
-        ctx.arc(dec.x, dec.y, 20, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#1a3a1a';
-        ctx.beginPath();
-        ctx.arc(dec.x, dec.y, 12, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (dec.type === 'flower') {
-        ctx.fillStyle = '#f472b6';
-        ctx.beginPath();
-        ctx.arc(dec.x, dec.y, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#fbbf24';
-        ctx.beginPath();
-        ctx.arc(dec.x, dec.y, 2, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (dec.type === 'bench') {
-        ctx.fillStyle = '#8b5a2b';
-        ctx.fillRect(dec.x - 15, dec.y - 5, 30, 10);
-        ctx.fillStyle = '#6b3a1b';
-        ctx.fillRect(dec.x - 12, dec.y + 5, 4, 8);
-        ctx.fillRect(dec.x + 8, dec.y + 5, 4, 8);
-      }
+    // Draw bots
+    const cam = cameraRef.current;
+    const viewLeft = cam.x;
+    const viewTop = cam.y;
+    const viewRight = cam.x + viewport.width / cam.zoom;
+    const viewBottom = cam.y + viewport.height / cam.zoom;
+
+    botsRef.current.forEach(bot => {
+      if (bot.position.x < viewLeft - 50 || bot.position.x > viewRight + 50 ||
+          bot.position.y < viewTop - 50 || bot.position.y > viewBottom + 50) return;
+
+      const dist = distance(player, bot.position);
+      const vol = calculateVoiceVolume(dist);
+      const inRange = dist < VOICE_RANGE;
+
+      drawPlayer(ctx, bot.position.x, bot.position.y, bot.color, bot.name, bot.direction, bot.speaking, inRange, vol, false, timeRef.current);
     });
 
+    // Draw player
+    drawPlayer(ctx, player.x, player.y, '#22c55e', 'Você', playerDirectionRef.current, false, true, 1, true, timeRef.current);
+
     // Voice range visualization
-    ctx.strokeStyle = 'rgba(34, 197, 94, 0.15)';
+    ctx.strokeStyle = 'rgba(34, 197, 94, 0.12)';
     ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
+    ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.arc(player.x, player.y, VOICE_RANGE, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    ctx.strokeStyle = 'rgba(34, 197, 94, 0.08)';
+    ctx.strokeStyle = 'rgba(34, 197, 94, 0.06)';
     ctx.beginPath();
     ctx.arc(player.x, player.y, VOICE_FADE_START, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Draw bots
-    botsRef.current.forEach(bot => {
-      const dist = distance(player, bot.position);
-      const vol = calculateVoiceVolume(dist);
-      const inRange = dist < VOICE_RANGE;
+    ctx.restore();
 
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.beginPath();
-      ctx.ellipse(bot.position.x, bot.position.y + 14, 10, 5, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Body
-      ctx.fillStyle = bot.color;
-      ctx.beginPath();
-      ctx.arc(bot.position.x, bot.position.y, 12, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Face direction indicator
-      ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      const eyeOffset = 4;
-      switch (bot.direction) {
-        case 'up': ctx.beginPath(); ctx.arc(bot.position.x - 3, bot.position.y - eyeOffset, 2, 0, Math.PI * 2); ctx.arc(bot.position.x + 3, bot.position.y - eyeOffset, 2, 0, Math.PI * 2); ctx.fill(); break;
-        case 'down': ctx.beginPath(); ctx.arc(bot.position.x - 3, bot.position.y + eyeOffset, 2, 0, Math.PI * 2); ctx.arc(bot.position.x + 3, bot.position.y + eyeOffset, 2, 0, Math.PI * 2); ctx.fill(); break;
-        case 'left': ctx.beginPath(); ctx.arc(bot.position.x - eyeOffset, bot.position.y - 2, 2, 0, Math.PI * 2); ctx.arc(bot.position.x - eyeOffset, bot.position.y + 2, 2, 0, Math.PI * 2); ctx.fill(); break;
-        case 'right': ctx.beginPath(); ctx.arc(bot.position.x + eyeOffset, bot.position.y - 2, 2, 0, Math.PI * 2); ctx.arc(bot.position.x + eyeOffset, bot.position.y + 2, 2, 0, Math.PI * 2); ctx.fill(); break;
-      }
-
-      // Speaking indicator
-      if (bot.speaking && inRange) {
-        ctx.strokeStyle = `rgba(34, 197, 94, ${vol * 0.8})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(bot.position.x, bot.position.y, 16 + Math.sin(Date.now() / 200) * 3, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      // Name tag
-      ctx.fillStyle = inRange ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)';
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(bot.name, bot.position.x, bot.position.y - 18);
-
-      // Volume bar
-      if (inRange && bot.speaking) {
-        const barWidth = 24;
-        const barHeight = 3;
-        const barX = bot.position.x - barWidth / 2;
-        const barY = bot.position.y - 26;
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillRect(barX, barY, barWidth, barHeight);
-        ctx.fillStyle = `rgba(34, 197, 94, ${vol})`;
-        ctx.fillRect(barX, barY, barWidth * vol, barHeight);
-      }
-    });
-
-    // Draw player
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.beginPath();
-    ctx.ellipse(player.x, player.y + 14, 12, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Body
-    ctx.fillStyle = '#22c55e';
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, 14, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Player outline
-    ctx.strokeStyle = '#16a34a';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, 14, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Player face
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    const pEyeOffset = 4;
-    switch (playerDirectionRef.current) {
-      case 'up':
-        ctx.beginPath(); ctx.arc(player.x - 4, player.y - pEyeOffset, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(player.x + 4, player.y - pEyeOffset, 2.5, 0, Math.PI * 2); ctx.fill();
-        break;
-      case 'down':
-        ctx.beginPath(); ctx.arc(player.x - 4, player.y + pEyeOffset, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(player.x + 4, player.y + pEyeOffset, 2.5, 0, Math.PI * 2); ctx.fill();
-        break;
-      case 'left':
-        ctx.beginPath(); ctx.arc(player.x - pEyeOffset, player.y - 3, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(player.x - pEyeOffset, player.y + 3, 2.5, 0, Math.PI * 2); ctx.fill();
-        break;
-      case 'right':
-        ctx.beginPath(); ctx.arc(player.x + pEyeOffset, player.y - 3, 2.5, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(player.x + pEyeOffset, player.y + 3, 2.5, 0, Math.PI * 2); ctx.fill();
-        break;
+    // Draw minimap
+    if (showMinimap) {
+      drawMinimap(ctx, canvas.width, canvas.height, player, botsRef.current, viewport);
     }
 
-    // Mic indicator on player
-    if (micActive) {
-      ctx.fillStyle = '#22c55e';
-      ctx.beginPath();
-      ctx.arc(player.x + 12, player.y - 12, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.font = '7px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('🎤', player.x + 12, player.y - 9);
-    }
-
-    // Player name
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 11px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('Você', player.x, player.y - 20);
-
-    // Movement indicator
-    if (moving) {
+    // Movement bridge event (throttled)
+    if (moving && frameRef.current % 5 === 0) {
       sendBridgeEvent({
         type: 'PLAYER_MOVE',
         source: 'unity',
@@ -366,7 +295,7 @@ export function AraParkUnityHost() {
     }
 
     animFrameRef.current = requestAnimationFrame(gameLoop);
-  }, [sendBridgeEvent, updateMetrics, micActive]);
+  }, [sendBridgeEvent, updateMetrics, showMinimap]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -377,13 +306,26 @@ export function AraParkUnityHost() {
   if (!loaded) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-gray-950">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-          className="w-12 h-12 border-4 border-green-500/30 border-t-green-500 rounded-full"
-        />
-        <p className="mt-4 text-green-400 text-sm">Carregando Unity WebGL...</p>
-        <p className="text-gray-500 text-xs mt-1">Inicializando mundo</p>
+        <div className="relative">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+            className="w-16 h-16 border-4 border-green-500/20 border-t-green-500 rounded-full"
+          />
+          <div className="absolute inset-0 flex items-center justify-center text-2xl">
+            🌳
+          </div>
+        </div>
+        <p className="mt-6 text-green-400 text-sm font-medium">Carregando Ara Park...</p>
+        <div className="mt-3 w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+          <motion.div
+            className="h-full bg-green-500 rounded-full"
+            initial={{ width: '0%' }}
+            animate={{ width: '100%' }}
+            transition={{ duration: 1.8, ease: 'easeInOut' }}
+          />
+        </div>
+        <p className="text-gray-600 text-xs mt-2">Inicializando mundo • Carregando assets</p>
       </div>
     );
   }
@@ -391,32 +333,46 @@ export function AraParkUnityHost() {
   return (
     <div className="h-full flex flex-col bg-gray-950">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-900/80 border-b border-gray-800">
+      <div className="flex items-center justify-between px-4 py-2 bg-gray-900/90 border-b border-gray-800 backdrop-blur-sm z-10">
         <div className="flex items-center gap-3">
           <span className="text-lg">🌳</span>
           <span className="text-white font-medium text-sm">Ara Park</span>
-          <span className="text-gray-500 text-xs">|</span>
-          <span className="text-gray-400 text-xs">
-            Célula: {Math.floor(playerRef.current.x / 200)},{Math.floor(playerRef.current.y / 200)}
-          </span>
+          {currentArea && (
+            <>
+              <span className="text-gray-600 text-xs">•</span>
+              <span className="text-xs px-2 py-0.5 rounded-full border" style={{ color: currentArea.color, borderColor: currentArea.color + '40', backgroundColor: currentArea.color + '10' }}>
+                {currentArea.icon} {currentArea.name}
+              </span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-3">
+          <span className="text-gray-500 text-xs hidden md:inline">
+            {playerCount} online
+          </span>
           <button
             onClick={() => setMicActive(!micActive)}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
               micActive
-                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                ? 'bg-green-500/20 text-green-400 border border-green-500/30 shadow-lg shadow-green-500/10'
+                : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'
+            }`}
+          >
+            {micActive ? '🎤 ON' : '🔇 OFF'}
+          </button>
+          <button
+            onClick={() => setShowMinimap(!showMinimap)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              showMinimap
+                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
                 : 'bg-gray-800 text-gray-400 border border-gray-700'
             }`}
           >
-            {micActive ? '🎤 Mic ON' : '🔇 Mic OFF'}
+            🗺️
           </button>
-          <span className="text-gray-500 text-xs">
-            Voz: {voiceUsers} perto
-          </span>
           <button
             onClick={closeActivity}
-            className="px-3 py-1 rounded-md text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
           >
             Sair
           </button>
@@ -424,30 +380,194 @@ export function AraParkUnityHost() {
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 flex items-center justify-center overflow-hidden bg-gray-950">
+      <div className="flex-1 relative overflow-hidden bg-gray-950">
         <canvas
           ref={canvasRef}
-          width={MAP_WIDTH}
-          height={MAP_HEIGHT}
-          className="max-w-full max-h-full border border-gray-800 rounded-lg"
-          style={{ imageRendering: 'pixelated' }}
+          className="w-full h-full block"
+          style={{ imageRendering: 'auto' }}
         />
-      </div>
 
-      {/* Bottom info */}
-      <div className="px-4 py-2 bg-gray-900/80 border-t border-gray-800 flex items-center justify-between">
-        <div className="flex items-center gap-4 text-xs text-gray-500">
-          <span>WASD para mover</span>
-          <span>•</span>
-          <span>VOI_RANGE: {VOICE_RANGE}px</span>
-          <span>•</span>
-          <span>FADE_START: {VOICE_FADE_START}px</span>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          <span>Unity WebGL (simulado)</span>
+        {/* Area description overlay */}
+        {currentArea && (
+          <motion.div
+            key={currentArea.id}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="absolute bottom-4 left-4 px-4 py-2 rounded-xl bg-gray-900/90 border border-gray-700 backdrop-blur-sm"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{currentArea.icon}</span>
+              <div>
+                <p className="text-white text-sm font-medium">{currentArea.name}</p>
+                <p className="text-gray-400 text-xs">{currentArea.description}</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Voice indicator */}
+        {voiceUsers > 0 && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-green-500/10 border border-green-500/30 backdrop-blur-sm"
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+              <span className="text-green-400 text-xs font-medium">
+                {voiceUsers} {voiceUsers === 1 ? 'pessoa' : 'pessoas'} perto de você
+              </span>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Controls hint */}
+        <div className="absolute bottom-4 right-4 text-xs text-gray-600 bg-gray-900/70 px-3 py-2 rounded-lg backdrop-blur-sm">
+          <p>WASD / Setas para mover</p>
+          <p>M para minimap</p>
+          <p>ESC para sair</p>
         </div>
       </div>
     </div>
   );
+}
+
+function drawPlayer(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  color: string,
+  name: string,
+  direction: 'left' | 'right' | 'up' | 'down',
+  speaking: boolean,
+  inRange: boolean,
+  volume: number,
+  isMainPlayer: boolean,
+  time: number,
+) {
+  const bobY = isMainPlayer ? 0 : Math.sin(time / 400 + x) * 1.5;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 16, 14, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y + bobY, 14, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Outline
+  ctx.strokeStyle = isMainPlayer ? '#16a34a' : 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = isMainPlayer ? 2.5 : 1.5;
+  ctx.beginPath();
+  ctx.arc(x, y + bobY, 14, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Face
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  const eyeOffset = 4;
+  switch (direction) {
+    case 'up':
+      ctx.beginPath(); ctx.arc(x - 4, y - eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 4, y - eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    case 'down':
+      ctx.beginPath(); ctx.arc(x - 4, y + eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 4, y + eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    case 'left':
+      ctx.beginPath(); ctx.arc(x - eyeOffset, y - 2 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x - eyeOffset, y + 3 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    case 'right':
+      ctx.beginPath(); ctx.arc(x + eyeOffset, y - 2 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + eyeOffset, y + 3 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      break;
+  }
+
+  // Speaking indicator
+  if (speaking && inRange && !isMainPlayer) {
+    const pulseSize = 18 + Math.sin(time / 200) * 3;
+    ctx.strokeStyle = `rgba(34, 197, 94, ${volume * 0.7})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y + bobY, pulseSize, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Volume bar
+    const barWidth = 28;
+    const barHeight = 3;
+    const barX = x - barWidth / 2;
+    const barY = y - 28 + bobY;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+    ctx.fillStyle = `rgba(34, 197, 94, ${volume})`;
+    ctx.fillRect(barX, barY, barWidth * volume, barHeight);
+  }
+
+  // Name tag
+  ctx.fillStyle = isMainPlayer ? '#fff' : inRange ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)';
+  ctx.font = isMainPlayer ? 'bold 11px monospace' : '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(name, x, y - 20 + bobY);
+}
+
+function drawMinimap(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  player: Position,
+  bots: Player[],
+  _viewport: Viewport,
+) {
+  const mapSize = 160;
+  const mapX = canvasWidth - mapSize - 16;
+  const mapY = 16;
+  const scale = mapSize / WORLD_WIDTH;
+
+  // Background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(mapX - 4, mapY - 4, mapSize + 8, mapSize + 8, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  // Area colors
+  MAP_AREAS.forEach(area => {
+    ctx.fillStyle = area.color + '30';
+    ctx.fillRect(
+      mapX + area.bounds.x * scale,
+      mapY + area.bounds.y * scale,
+      area.bounds.w * scale,
+      area.bounds.h * scale
+    );
+  });
+
+  // Bots
+  bots.forEach(bot => {
+    ctx.fillStyle = bot.color;
+    ctx.beginPath();
+    ctx.arc(mapX + bot.position.x * scale, mapY + bot.position.y * scale, 2, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Player
+  ctx.fillStyle = '#22c55e';
+  ctx.beginPath();
+  ctx.arc(mapX + player.x * scale, mapY + player.y * scale, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('MAPA', mapX + mapSize / 2, mapY + mapSize + 14);
 }
