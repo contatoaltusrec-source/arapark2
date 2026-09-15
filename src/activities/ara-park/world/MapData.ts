@@ -106,44 +106,71 @@ export function generateDecorations(): MapDecoration[] {
   const decorations: MapDecoration[] = [];
   const random = rng(42);
 
-  // Trees scattered everywhere
-  for (let i = 0; i < 200; i++) {
-    decorations.push({
-      type: 'tree',
-      x: random() * WORLD_WIDTH,
-      y: random() * WORLD_HEIGHT,
-      variant: Math.floor(random() * 4),
-    });
+  // Helper to check if position is in a path or water (avoid placing decorations there)
+  const isBlocked = (x: number, y: number): boolean => {
+    // Main paths
+    if (Math.abs(y - 1590) < 50 && x > 0 && x < WORLD_WIDTH) return true;
+    if (Math.abs(x - 1610) < 50 && y > 0 && y < WORLD_HEIGHT) return true;
+    // Ponds
+    if (Math.sqrt((x - 1400) ** 2 + (y - 300) ** 2) < 100) return true;
+    if (Math.sqrt((x - 500) ** 2 + (y - 1500) ** 2) < 80) return true;
+    return false;
+  };
+
+  // Trees scattered everywhere (more dense)
+  for (let i = 0; i < 350; i++) {
+    const x = random() * WORLD_WIDTH;
+    const y = random() * WORLD_HEIGHT;
+    if (!isBlocked(x, y)) {
+      decorations.push({
+        type: 'tree',
+        x,
+        y,
+        variant: Math.floor(random() * 4),
+      });
+    }
   }
 
-  // Flowers
-  for (let i = 0; i < 150; i++) {
-    decorations.push({
-      type: 'flower',
-      x: random() * WORLD_WIDTH,
-      y: random() * WORLD_HEIGHT,
-      variant: Math.floor(random() * 5),
-    });
+  // Flowers (lots of them!)
+  for (let i = 0; i < 400; i++) {
+    const x = random() * WORLD_WIDTH;
+    const y = random() * WORLD_HEIGHT;
+    if (!isBlocked(x, y)) {
+      decorations.push({
+        type: 'flower',
+        x,
+        y,
+        variant: Math.floor(random() * 5),
+      });
+    }
   }
 
   // Bushes
-  for (let i = 0; i < 80; i++) {
-    decorations.push({
-      type: 'bush',
-      x: random() * WORLD_WIDTH,
-      y: random() * WORLD_HEIGHT,
-      variant: Math.floor(random() * 3),
-    });
+  for (let i = 0; i < 150; i++) {
+    const x = random() * WORLD_WIDTH;
+    const y = random() * WORLD_HEIGHT;
+    if (!isBlocked(x, y)) {
+      decorations.push({
+        type: 'bush',
+        x,
+        y,
+        variant: Math.floor(random() * 3),
+      });
+    }
   }
 
   // Rocks
-  for (let i = 0; i < 60; i++) {
-    decorations.push({
-      type: 'rock',
-      x: random() * WORLD_WIDTH,
-      y: random() * WORLD_HEIGHT,
-      variant: Math.floor(random() * 3),
-    });
+  for (let i = 0; i < 100; i++) {
+    const x = random() * WORLD_WIDTH;
+    const y = random() * WORLD_HEIGHT;
+    if (!isBlocked(x, y)) {
+      decorations.push({
+        type: 'rock',
+        x,
+        y,
+        variant: Math.floor(random() * 3),
+      });
+    }
   }
 
   // Benches in plaza and chill zone
@@ -233,6 +260,161 @@ export function generateDecorations(): MapDecoration[] {
   // Bridges
   decorations.push({ type: 'bridge', x: 1400, y: 350 });
   decorations.push({ type: 'bridge', x: 500, y: 1550 });
+
+  // === THEME-SPECIFIC DECORATIONS ===
+
+  // Music Zone - instruments and musical elements
+  for (let i = 0; i < 20; i++) {
+    decorations.push({
+      type: 'flower',
+      x: random() * 900 + 50,
+      y: random() * 900 + 50,
+      variant: Math.floor(random() * 5),
+    });
+  }
+  // Extra benches around music zone
+  for (let i = 0; i < 8; i++) {
+    decorations.push({
+      type: 'bench',
+      x: 100 + random() * 800,
+      y: 100 + random() * 800,
+      variant: Math.floor(random() * 2),
+    });
+  }
+
+  // Games Zone - arcade feel
+  for (let i = 0; i < 15; i++) {
+    decorations.push({
+      type: 'rock',
+      x: 2200 + random() * 800,
+      y: random() * 800,
+      variant: Math.floor(random() * 3),
+    });
+  }
+  for (let i = 0; i < 10; i++) {
+    decorations.push({
+      type: 'lamp',
+      x: 2250 + random() * 700,
+      y: 100 + random() * 700,
+    });
+  }
+
+  // Art Zone - colorful flowers
+  for (let i = 0; i < 50; i++) {
+    decorations.push({
+      type: 'flower',
+      x: random() * 900,
+      y: 2200 + random() * 800,
+      variant: Math.floor(random() * 5),
+    });
+  }
+  for (let i = 0; i < 20; i++) {
+    decorations.push({
+      type: 'bush',
+      x: random() * 900,
+      y: 2200 + random() * 800,
+      variant: Math.floor(random() * 3),
+    });
+  }
+
+  // Tech Zone - crystals
+  for (let i = 0; i < 25; i++) {
+    decorations.push({
+      type: 'crystal',
+      x: 2200 + random() * 900,
+      y: 2200 + random() * 900,
+      variant: Math.floor(random() * 3),
+    });
+  }
+
+  // Nature Trail - extra mushrooms and trees
+  for (let i = 0; i < 30; i++) {
+    decorations.push({
+      type: 'mushroom',
+      x: 1000 + random() * 1100,
+      y: random() * 500,
+      variant: Math.floor(random() * 3),
+    });
+  }
+  for (let i = 0; i < 40; i++) {
+    decorations.push({
+      type: 'tree',
+      x: 1000 + random() * 1100,
+      y: random() * 500,
+      variant: Math.floor(random() * 4),
+    });
+  }
+
+  // Chill Zone - lots of benches and lamps
+  for (let i = 0; i < 15; i++) {
+    decorations.push({
+      type: 'bench',
+      x: random() * 500,
+      y: 1000 + random() * 1100,
+      variant: Math.floor(random() * 2),
+    });
+  }
+  for (let i = 0; i < 20; i++) {
+    decorations.push({
+      type: 'lamp',
+      x: random() * 500,
+      y: 1000 + random() * 1100,
+    });
+  }
+
+  // Market - tents and signs
+  for (let i = 0; i < 10; i++) {
+    decorations.push({
+      type: 'tent',
+      x: 2650 + random() * 500,
+      y: 1050 + random() * 1000,
+      variant: Math.floor(random() * 3),
+    });
+  }
+
+  // Central Plaza - extra decoration
+  for (let i = 0; i < 12; i++) {
+    decorations.push({
+      type: 'flower',
+      x: 1250 + random() * 700,
+      y: 1250 + random() * 700,
+      variant: Math.floor(random() * 5),
+    });
+  }
+  for (let i = 0; i < 8; i++) {
+    decorations.push({
+      type: 'bush',
+      x: 1250 + random() * 700,
+      y: 1250 + random() * 700,
+      variant: Math.floor(random() * 3),
+    });
+  }
+
+  // Additional houses scattered around
+  const extraHousePositions = [
+    { x: 150, y: 800 }, { x: 850, y: 1200 }, { x: 1800, y: 200 },
+    { x: 2100, y: 1500 }, { x: 1100, y: 2400 }, { x: 2900, y: 1800 },
+    { x: 400, y: 2900 }, { x: 1900, y: 2900 }, { x: 2600, y: 2900 },
+  ];
+  extraHousePositions.forEach((pos, i) => {
+    decorations.push({ type: 'house', x: pos.x, y: pos.y, variant: i % 3 });
+  });
+
+  // Extra lamps along paths
+  for (let i = 0; i < 30; i++) {
+    decorations.push({
+      type: 'lamp',
+      x: 100 + random() * 3000,
+      y: 1550 + (random() > 0.5 ? 60 : -60),
+    });
+  }
+  for (let i = 0; i < 30; i++) {
+    decorations.push({
+      type: 'lamp',
+      x: 1570 + (random() > 0.5 ? 60 : -60),
+      y: 100 + random() * 3000,
+    });
+  }
 
   return decorations;
 }

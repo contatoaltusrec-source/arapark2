@@ -21,7 +21,7 @@ interface Player {
   targetY?: number;
 }
 
-const PLAYER_SPEED = 4;
+const PLAYER_SPEED = 2.2;
 const VOICE_RANGE = 180;
 const VOICE_FADE_START = 120;
 const BOT_COUNT = 15;
@@ -383,45 +383,104 @@ function drawPlayer(
   isMainPlayer: boolean,
   time: number,
 ) {
-  const bobY = isMainPlayer ? 0 : Math.sin(time / 400 + x) * 1.5;
+  const walkCycle = Math.sin(time / 150) * 1.5;
+  const bobY = Math.sin(time / 300 + x * 0.01) * 1;
 
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
-  ctx.ellipse(x, y + 16, 14, 6, 0, 0, Math.PI * 2);
+  ctx.ellipse(x, y + 18, 10, 4, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  // Legs (animated when walking)
+  ctx.fillStyle = '#3a3a5a';
+  const legOffset = Math.abs(walkCycle) > 0.5 ? walkCycle : 0;
+  ctx.fillRect(x - 5, y + 8 + bobY, 4, 10);
+  ctx.fillRect(x + 1, y + 8 + bobY, 4, 10);
+
+  // Shoes
+  ctx.fillStyle = '#2a2a3a';
+  ctx.fillRect(x - 6, y + 16 + bobY, 5, 3);
+  ctx.fillRect(x + 1, y + 16 + bobY, 5, 3);
+
+  // Body
   ctx.fillStyle = color;
+  ctx.fillRect(x - 8, y - 4 + bobY, 16, 14);
+
+  // Body shading
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillRect(x + 4, y - 4 + bobY, 4, 14);
+
+  // Arms
+  ctx.fillStyle = color;
+  const armSwing = Math.sin(time / 150) * 2;
+  ctx.fillRect(x - 10, y - 2 + bobY + armSwing, 3, 10);
+  ctx.fillRect(x + 7, y - 2 + bobY - armSwing, 3, 10);
+
+  // Hands
+  ctx.fillStyle = '#f5d5b5';
+  ctx.fillRect(x - 10, y + 7 + bobY + armSwing, 3, 3);
+  ctx.fillRect(x + 7, y + 7 + bobY - armSwing, 3, 3);
+
+  // Head
+  ctx.fillStyle = '#f5d5b5';
   ctx.beginPath();
-  ctx.arc(x, y + bobY, 14, 0, Math.PI * 2);
+  ctx.arc(x, y - 10 + bobY, 9, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = isMainPlayer ? '#16a34a' : 'rgba(0,0,0,0.3)';
-  ctx.lineWidth = isMainPlayer ? 2.5 : 1.5;
+  // Head outline
+  ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(x, y + bobY, 14, 0, Math.PI * 2);
+  ctx.arc(x, y - 10 + bobY, 9, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  const eyeOffset = 4;
+  // Hair
+  ctx.fillStyle = isMainPlayer ? '#5a3a1a' : '#3a2a1a';
+  ctx.beginPath();
+  ctx.arc(x, y - 12 + bobY, 9, Math.PI, 0);
+  ctx.fill();
+
+  // Hair bangs
+  ctx.fillRect(x - 8, y - 14 + bobY, 16, 3);
+
+  // Face based on direction
+  ctx.fillStyle = '#2a2a2a';
   switch (direction) {
-    case 'up':
-      ctx.beginPath(); ctx.arc(x - 4, y - eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + 4, y - eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
-      break;
     case 'down':
-      ctx.beginPath(); ctx.arc(x - 4, y + eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + 4, y + eyeOffset + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      // Eyes
+      ctx.fillRect(x - 4, y - 11 + bobY, 2, 2);
+      ctx.fillRect(x + 2, y - 11 + bobY, 2, 2);
+      // Mouth
+      ctx.fillRect(x - 1, y - 7 + bobY, 2, 1);
+      break;
+    case 'up':
+      // Back of head - just hair
       break;
     case 'left':
-      ctx.beginPath(); ctx.arc(x - eyeOffset, y - 2 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x - eyeOffset, y + 3 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      // Side profile
+      ctx.fillRect(x - 5, y - 11 + bobY, 2, 2);
+      ctx.fillRect(x - 4, y - 7 + bobY, 2, 1);
       break;
     case 'right':
-      ctx.beginPath(); ctx.arc(x + eyeOffset, y - 2 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + eyeOffset, y + 3 + bobY, 2.5, 0, Math.PI * 2); ctx.fill();
+      // Side profile
+      ctx.fillRect(x + 3, y - 11 + bobY, 2, 2);
+      ctx.fillRect(x + 2, y - 7 + bobY, 2, 1);
       break;
   }
 
+  // Player indicator (arrow above main player)
+  if (isMainPlayer) {
+    ctx.fillStyle = '#22c55e';
+    ctx.beginPath();
+    ctx.moveTo(x, y - 24 + bobY);
+    ctx.lineTo(x - 4, y - 28 + bobY);
+    ctx.lineTo(x + 4, y - 28 + bobY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Speaking indicator
   if (speaking && inRange && !isMainPlayer) {
     const pulseSize = 18 + Math.sin(time / 200) * 3;
     ctx.strokeStyle = `rgba(34, 197, 94, ${volume * 0.7})`;
@@ -430,20 +489,31 @@ function drawPlayer(
     ctx.arc(x, y + bobY, pulseSize, 0, Math.PI * 2);
     ctx.stroke();
 
+    // Volume bar
     const barWidth = 28;
     const barHeight = 3;
     const barX = x - barWidth / 2;
-    const barY = y - 28 + bobY;
+    const barY = y - 32 + bobY;
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(barX, barY, barWidth, barHeight);
     ctx.fillStyle = `rgba(34, 197, 94, ${volume})`;
     ctx.fillRect(barX, barY, barWidth * volume, barHeight);
   }
 
-  ctx.fillStyle = isMainPlayer ? '#fff' : inRange ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.4)';
+  // Name tag with background
   ctx.font = isMainPlayer ? 'bold 11px monospace' : '10px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(name, x, y - 20 + bobY);
+  const textWidth = ctx.measureText(name).width;
+
+  // Name background
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.beginPath();
+  ctx.roundRect(x - textWidth / 2 - 4, y - 38 + bobY, textWidth + 8, 14, 4);
+  ctx.fill();
+
+  // Name text
+  ctx.fillStyle = isMainPlayer ? '#22c55e' : inRange ? '#fff' : 'rgba(255,255,255,0.5)';
+  ctx.fillText(name, x, y - 28 + bobY);
 }
 
 function drawMinimap(
